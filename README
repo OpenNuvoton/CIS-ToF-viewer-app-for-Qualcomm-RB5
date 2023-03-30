@@ -1,0 +1,70 @@
+This sample code illustrate how to use libccdtof.so with post processing.
+It obtain depth and IR iamge from it, apply some post processing, and derive 3D point cloud data.
+Display it using opencv and opengl.
+
+
+1) Preparation
+==============
+OpenCV and OpenGL installation at RB5
+-------------------------------------
+sudo apt update
+sudo apt install libopencv-dev
+sudo apt install libglfw3 libglfw3-dev
+sudo apt install freeglut3-dev
+
+xWayland installation at RB5
+----------------------------
+sudo apt install xwayland
+mkdir -p /root/.config
+vim /root/.config/weston.ini
+[core]
+xwayland=true
+[xwayland]
+path=/usr/bin/Xwayland
+
+Create symbolic link allow system to find the xwayland library at RB5
+---------------------------------------------------------------------
+cd /usr/lib/libweston-3
+ln -s ../aarch64-linux-gnu/libweston-3/xwayland.so
+
+
+
+2) Launch xWayland GUI at RB5
+=============================
+export XDG_RUNTIME_DIR=/usr/bin/weston_socket
+export LD_LIBRARY_PATH=/usr/lib:/usr/lib/aarch64-linux-gnu/
+export GDK_BACKEND=x11
+weston --tty=1 --connector=29 --idle-time=0
+
+
+A pure GUI with plain wallpaper will be displayed.
+It have top task bar, with one icon on left hand side, and date time info at right hand side.
+There is only one apps available in this xWayland GUI, i.e. "weston-terminal".
+To launch xWayland apps, "weston-terminal", click on the small icon at upper left hand corner.
+
+
+3) Copy hal/camx/chi-cdk libraries
+==================================
+Download hal/camx/chi-cdk libraries from below:-
+https://github.com/OpenNuvoton/CIS-ToF-dev-drv-lib-for-Qualcomm-RB5
+
+Then copy it into RB5 at location indicate below:-
+cp com.qti.eeprom.nuvo_kw33000.so        /usr/lib/camera/
+cp com.qti.sensor.kw33000.so             /usr/lib/camera/
+cp com.qti.sensormodule.nuvo_kw33000.bin /usr/lib/camera/
+cp camera.qcom.so          /usr/lib/hw/
+cp com.qti.chi.override.so /usr/lib/hw/
+
+
+4) Compile at RB5
+=================
+./do_viewer_cis.sh
+
+
+
+5) Run at RB5 (Must be run at xWayland GUI prompt)
+=============
+./go_viewer_cis.sh
+
+
+EOF
