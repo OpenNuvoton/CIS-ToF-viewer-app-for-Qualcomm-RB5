@@ -109,7 +109,6 @@ static void apl_print_error(TL_E_RESULT ret, char *function, unsigned int line);
 
 void apl_show_img(TL_E_MODE mode, TL_E_IMAGE_KIND img_kind, TL_Resolution reso, TL_Image *stData);
 void *view_thread(void *);
-void get_user_selection(void);
 
 
 //******************************************************************************
@@ -481,7 +480,6 @@ static int apl_capture(void)
 	if (ret == TL_E_SUCCESS) {
 		// recieved image data
 		if ((notify & (uint32_t)TL_NOTIFY_IMAGE) != 0U) {
-
 			// Show the image
 			apl_show_img(gPrm.mode, gPrm.image_kind, gPrm.resolution, data);
 		}
@@ -657,57 +655,10 @@ static void apl_images_size(void)
 //******************************************************************************
 static void apl_signal_handler(int signal)
 {
-	(void)signal;
+	printf("Killed (signal:%d)\n", signal);
 	bExit = true;
 }
 
-
-//******************************************************************************
-//! \brief        Utilities Function To Get User Entry.
-//! \details
-//! \param[in]    size  This is the maximum number of characters to be read (including the final null-character). Usually, the length of the array passed as str is used.
-//! \param[out]   buf   This is the pointer to an array of chars where the string read is stored.
-//! \return       Pointer To User Entry String
-//! \date         2021-02-16, Tue, 02:33 PM
-//******************************************************************************
-char *apl_ext_gets(char *buf, int size)
-{
-	size_t n;
-	char   *p;
-
-	p = fgets(buf, size, stdin);
-	n = strlen(buf);
-	if (buf[n-1] == '\n') {
-		buf[n-1] = '\0';
-	}
-	else {
-		buf[size-1] = '\0';
-	}
-
-	return p;
-}
-
-//******************************************************************************
-//! \brief	Get user input selection
-//! \param	[in]	min_choice		minimum range
-//! \param	[in]	max_choice		maximum range
-//! \return         None
-//! \date           2023-03-15, Wed, 02:33 PM
-//******************************************************************************
-int get_user_input(int min_choice, int max_choice)
-{
-	int user_input = 0;
-
-	do {
-		printf("Enter: ");
-		scanf("%d", &user_input);
-		if (user_input >= min_choice && user_input <= max_choice) {
-			break;
-		}
-	} while (true);
-
-	return user_input;
-}
 
 //******************************************************************************
 //! \brief        Utilities Function To Calculate FPS
@@ -864,7 +815,7 @@ void apl_show_pnl(void)
 
 	cv::imshow(OPENCV_WINDOW_NAME_PANEL_VIEWER, mat_footer);
 	//cv::namedWindow(OPENCV_WINDOW_NAME_PANEL_VIEWER, CV_WINDOW_NORMAL);
-	cv::moveWindow(OPENCV_WINDOW_NAME_PANEL_VIEWER, 650, 10);
+	cv::moveWindow(OPENCV_WINDOW_NAME_PANEL_VIEWER, 1400, 100);
 	cv::resizeWindow(OPENCV_WINDOW_NAME_PANEL_VIEWER, 340, 80);
 	cv::waitKey(1);  // Draw The Screen And Wait For 1 Millisecond.
 
@@ -953,6 +904,7 @@ void apl_show_img(TL_E_MODE mode, TL_E_IMAGE_KIND img_kind, TL_Resolution reso, 
 
 		//! \remark - Display It.
 		cv::imshow(OPENCV_WINDOW_NAME_DPTH, mat_depth_color);
+		cv::moveWindow(OPENCV_WINDOW_NAME_DPTH, 20, 20);
 		cv::waitKey(1);	// Draw The Screen And Wait For 1 Millisecond.
 	}
 
@@ -990,6 +942,7 @@ void apl_show_img(TL_E_MODE mode, TL_E_IMAGE_KIND img_kind, TL_Resolution reso, 
 		//! \remark - Display It.
 		cv::createTrackbar(OPENCV_TRACKBAR_NAME_GAMMA_CORR_IR, OPENCV_WINDOW_NAME_IR, &gamma_corr_ir, 30);
 		cv::imshow(OPENCV_WINDOW_NAME_IR, mat_ir);
+		cv::moveWindow(OPENCV_WINDOW_NAME_IR, 20, 520);
 		cv::waitKey(1);	// Draw The Screen And Wait For 1 Millisecond.
 	}
 
@@ -1017,11 +970,14 @@ void apl_show_img(TL_E_MODE mode, TL_E_IMAGE_KIND img_kind, TL_Resolution reso, 
 
 		//! \remark - Display It.
 		cv::imshow(OPENCV_WINDOW_NAME_CONFDATA, mat_confdata);
+		cv::moveWindow(OPENCV_WINDOW_NAME_CONFDATA, 680, 20);
 		cv::waitKey(1);	// Draw The Screen And Wait For 1 Millisecond.
 	}
 	else {
 		//! \remark - Destroy It.
-		cv::destroyWindow(OPENCV_WINDOW_NAME_CONFDATA);
+		if (cv::getWindowProperty(OPENCV_WINDOW_NAME_CONFDATA, cv::WND_PROP_AUTOSIZE) != -1) {
+			cv::destroyWindow(OPENCV_WINDOW_NAME_CONFDATA);
+		}
 	}
 
 	if (show_irnrref) {
@@ -1048,11 +1004,14 @@ void apl_show_img(TL_E_MODE mode, TL_E_IMAGE_KIND img_kind, TL_Resolution reso, 
 
 		//! \remark - Display It.
 		cv::imshow(OPENCV_WINDOW_NAME_IRNRREF, mat_irnrref);
+		cv::moveWindow(OPENCV_WINDOW_NAME_IRNRREF, 680, 520);
 		cv::waitKey(1);	// Draw The Screen And Wait For 1 Millisecond.
 	}
 	else {
 		//! \remark - Destroy It.
-		cv::destroyWindow(OPENCV_WINDOW_NAME_IRNRREF);
+		if (cv::getWindowProperty(OPENCV_WINDOW_NAME_IRNRREF, cv::WND_PROP_AUTOSIZE) != -1) {
+			cv::destroyWindow(OPENCV_WINDOW_NAME_IRNRREF);
+		}
 	}
 }
 
@@ -1093,59 +1052,50 @@ void *view_thread(void *data)
 	return nullptr;
 }
 
-//******************************************************************************
-//! \brief	Mode and type input selection
-//! \date       2023-03-16, Thur, 02:33 PM
-//******************************************************************************
-void get_user_selection(void)
-{
-	char select_temp;
-
-	printf("----------------------------------------------\n");
-	printf("%s [Ver.%04x]\n", TOF_VIEWER_STRING, (int)TOF_VIEWER_VERSION);
-	printf("Press [ctrl + c] to quit. \n");
-	printf("----------------------------------------------\n");
-
-	/* Image kind */
-	gPrm.image_kind = TL_E_IMAGE_KIND_VGA_DEPTH_IR;
-
-	/* Ranging mode selection */
-	printf("\n");
-	printf("Ranging mode selection (Current=%d)\n", gPrm.mode+1);
-	printf( "1 : MODE1\n"
-			"2 : MODE2\n"
-			"3 : MODE3\n"
-			"4 : MODE4\n"
-			"5 : MODE5\n"
-			"6 : MODE6\n");
-
-	select_temp = get_user_input(1, 6);
-	gPrm.mode = (TL_E_MODE) (select_temp - 1);
-
-}
-
 
 //******************************************************************************
 //! \brief        main function
 //! \n
 //! \param[in]    argc         number of arguments.
 //! \param[in]    argv         arguments.
+//! \remarks      arg1         ranging mode number (1,2,3,4,5,6) [For USE_CIS_MIPI only]
 //! \return       -1           fail with some error.
 //! \date         2021-11-30, Tue, 02:33 PM
 //******************************************************************************
 int main(int argc, char *argv[])
 {
 	int ret = 0;
+	uint8_t m;
 
-	signal(SIGINT, apl_signal_handler);
+	printf("----------------------------------------------\n");
+	printf("%s [Ver.%04x]\n", TOF_VIEWER_STRING, (int)TOF_VIEWER_VERSION);
+	printf("Press [ctrl + c] to quit. \n");
+	printf("----------------------------------------------\n");
+
+	// Add Signal Handler For Failsafe
+	if (SIG_ERR == signal(SIGABRT, apl_signal_handler)) { printf("SIGABRT error(%d)\n", errno); };
+	if (SIG_ERR == signal(SIGQUIT, apl_signal_handler)) { printf("SIGQUIT error(%d)\n", errno); };
+	if (SIG_ERR == signal(SIGTERM, apl_signal_handler)) { printf("SIGTERM error(%d)\n", errno); };
+	if (SIG_ERR == signal(SIGINT,  apl_signal_handler)) { printf("SIGINT error(%d)\n",  errno); };
 
 	memset(&gPrm, 0, sizeof(gPrm));
 
+	// Default Setting
 	gPrm.mode = TL_E_MODE_0;
 	gPrm.image_kind = TL_E_IMAGE_KIND_VGA_DEPTH_IR;
 
-	// Get user mode and type selection
-	get_user_selection();
+	// Get User Mode From Argument
+	if (argc > 1) {
+		m = static_cast<uint8_t>(atoi(argv[1]));
+		if ((m > 0) && (m <= TL_E_MODE_NUM)) {
+			gPrm.mode = (TL_E_MODE) (m-1U);
+		}
+		else {
+			printf("Invalid arg <mode> %u.\n", m);
+			exit(-1);
+		}
+	}
+	printf("Mode selected : %d\n", gPrm.mode + 1);	// Cis Mode Index From 1 to 6 From User Input Perpective (But In Code, Always Index From 0)
 
 	// User Have On Camera Streaming, Proceed.
 	if ((ret = apl_init(gPrm.mode, gPrm.image_kind)) < 0) {

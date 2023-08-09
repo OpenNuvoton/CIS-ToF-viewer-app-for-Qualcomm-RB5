@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.2)
 
 # local project name
-project (viewer_postprocessing)
+project (viewer)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
