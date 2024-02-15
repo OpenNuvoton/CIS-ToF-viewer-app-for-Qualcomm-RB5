@@ -23,6 +23,7 @@
 #include <thread>
 #include <forward_list>
 #include <mutex>
+#include <ctime>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -44,7 +45,7 @@ extern "C"
 #define DEBUG								1	// debug log
 #define USE_OPEN_CV_COLOR_MAP				1	// Use OpenCv ColorMap, COLORMAP_JET
 
-#define TOF_VIEWER_VERSION					(0x0001)
+#define TOF_VIEWER_VERSION				(0x0002)
 #define TOF_VIEWER_STRING				"CIS ToF Viewer"
 #define OPENCV_WINDOW_NAME_PANEL_VIEWER	"CIS ToF Viewer - Control Panel"
 
@@ -83,18 +84,24 @@ typedef struct {
 	bool				view_bef_enh_on;	// Image before Enhance feature on/off
 } __attribute__((aligned(8))) apl_prm;
 
+static const uint16_t	RAW12_INVALID_DEPTH = 0x0FFFU;	/*!< invalid depth in RAW12 format */
+static const uint16_t	INVALID_DEPTH = 0xFFFFU;		/*!< invalid depth */
+
 static apl_prm gPrm;			// application parameters
 static bool bExit = false;		// false = Run Program, true = Exit Program.
 
 static uint8_t							FRM_BUF_CNT = 1U;	// maximum of frame buffer
 static std::mutex						sBufMtx;			// mutex for buffer, queue
 static std::forward_list<TL_Image *>	sFreeBuf;			// free buffer list
+static std::mutex mutexUserInput;							// mutex
+static std::string userInput;								// user input
 
 static unsigned int start = 0;
 static unsigned int end = 0;
 static unsigned int fps = 0;
 static unsigned int calcfps = 0;
 
+pthread_t threadusrinp;		// View Thread (Handle User Input)
 pthread_t threadview;		// View Thread (Handle Depth View, IR View)
 
 #if USE_OPEN_CV_COLOR_MAP
@@ -107,7 +114,9 @@ class fwc::ColorTable* color_tbl;
 //******************************************************************************
 static void apl_print_error(TL_E_RESULT ret, char *function, unsigned int line);	// TODO remove
 
+void apl_cnv_dp(TL_Resolution reso, TL_Image *stData, uint16_t unit);
 void apl_show_img(TL_E_MODE mode, TL_E_IMAGE_KIND img_kind, TL_Resolution reso, TL_Image *stData);
+void *user_input_thread(void *);
 void *view_thread(void *);
 
 
@@ -198,6 +207,169 @@ void apl_frmbuf_rel(TL_Image** buf)
 
 	sFreeBuf.push_front(*buf);
 	*buf = nullptr;
+}
+
+
+//******************************************************************************
+//! \brief  Get User Input From Keyboard
+//! \param  [in]    None
+//! \param  [out]   User Input String
+//******************************************************************************
+std::string apl_get_usr_inp(void)
+{
+	std::string retInput = "";
+	std::lock_guard<std::mutex> lock(mutexUserInput);
+
+	if (!userInput.empty()) {
+		// Copy The Shared Variable To Return
+		retInput = userInput;
+
+		// Clear The Input
+		userInput.clear();
+	}
+
+	return retInput;
+}
+
+
+//******************************************************************************
+//! \brief  Release User Input String Buffer
+//! \param  [in,out]    None
+//******************************************************************************
+void apl_rel_usr_inp(void)
+{
+	std::lock_guard<std::mutex> lock(mutexUserInput);
+	userInput.clear();  // Clear the input
+}
+
+
+//******************************************************************************
+//! brief       Save File
+//! param[in]   mode               camera mode
+//! param[in]   data               image data
+//! param[in]   size               image size
+//! return none
+//******************************************************************************
+static void apl_save_file(TL_E_MODE mode, TL_Resolution reso, TL_Image *stData)
+{
+	std::string tmpStr = "";
+	static uint16_t idx = 0;
+	static uint16_t fileSaveCnt = 0;
+	std::time_t timeRaw;
+	std::tm* timeInfo;
+	static char strTime[256];
+	char fn[256];
+	FILE  *fp;
+	size_t  ret;
+	size_t  data_size;
+	uint8_t *p_data;
+
+	if (stData == NULL) {
+		printf("image data is null\n");
+		return;
+	}
+
+	if (fileSaveCnt == 0) {
+		tmpStr = apl_get_usr_inp();
+		if (tmpStr != "") {
+			fileSaveCnt = std::stoi(tmpStr);
+
+			std::time(&timeRaw);
+			timeInfo = std::localtime(&timeRaw);
+			std::strftime(strTime, sizeof(strTime), "%Y%m%d_%H%M%S", timeInfo);
+		}
+	}
+	else {
+		data_size = reso.depth.height * reso.depth.width * 2;
+		p_data = (uint8_t *)stData->depth;
+		snprintf(fn, sizeof(fn), "mode%d_%s_dp%04d.raw", mode+1, strTime, idx);	// Mode+1 For Index From 1 (Although Code Is Index From 0)
+
+		fp = fopen(fn, "wb");
+		if (fp == NULL) {
+			printf("fopen (%s) failed\n", fn);
+			return;
+		}
+
+		ret = fwrite((const void*)p_data, data_size, 1, fp);
+		if ((ret != (size_t)1) &&
+			(ferror(fp) != 0) &&
+			(feof(fp) != 0)) {
+			printf("fwrite (%s) failed(%d/%d)\n", fn, (int)ret, ferror(fp));
+			clearerr(fp);
+		}
+
+		(void)fclose(fp);
+
+		data_size = reso.ir.height * reso.ir.width * 2;
+		p_data = (uint8_t *)stData->ir;
+		snprintf(fn, sizeof(fn), "mode%d_%s_ir%04d.raw", mode+1, strTime, idx);
+
+		fp = fopen(fn, "wb");
+		if (fp == NULL) {
+			printf("fopen (%s) failed\n", fn);
+			return;
+		}
+
+		ret = fwrite((const void*)p_data, data_size, 1, fp);
+		if ((ret != (size_t)1) &&
+			(ferror(fp) != 0) &&
+			(feof(fp) != 0)) {
+			printf("fwrite (%s) failed(%d/%d)\n", fn, (int)ret, ferror(fp));
+			clearerr(fp);
+		}
+
+		(void)fclose(fp);
+
+		data_size = reso.confdata.height * reso.confdata.width * 2;
+		p_data = (uint8_t *)stData->confdata;
+		snprintf(fn, sizeof(fn), "mode%d_%s_cf%04d.raw", mode+1, strTime, idx);
+
+		fp = fopen(fn, "wb");
+		if (fp == NULL) {
+			printf("fopen (%s) failed\n", fn);
+			return;
+		}
+
+		ret = fwrite((const void*)p_data, data_size, 1, fp);
+		if ((ret != (size_t)1) &&
+			(ferror(fp) != 0) &&
+			(feof(fp) != 0)) {
+			printf("fwrite (%s) failed(%d/%d)\n", fn, (int)ret, ferror(fp));
+			clearerr(fp);
+		}
+
+		(void)fclose(fp);
+
+		data_size = reso.irnrref.height * reso.irnrref.width * 2;
+		p_data = (uint8_t *)stData->irnrref;
+		snprintf(fn, sizeof(fn), "mode%d_%s_rf%04d.raw", mode+1, strTime, idx);
+
+		fp = fopen(fn, "wb");
+		if (fp == NULL) {
+			printf("fopen (%s) failed\n", fn);
+			return;
+		}
+
+		ret = fwrite((const void*)p_data, data_size, 1, fp);
+		if ((ret != (size_t)1) &&
+			(ferror(fp) != 0) &&
+			(feof(fp) != 0)) {
+			printf("fwrite (%s) failed(%d/%d)\n", fn, (int)ret, ferror(fp));
+			clearerr(fp);
+		}
+
+		(void)fclose(fp);
+
+		idx++;
+		if (idx >= fileSaveCnt) {
+			std::cout << "Total of " << fileSaveCnt << " files mode#_" << strTime << "_{dp|ir|cf|rf}####.raw being saved." << std::endl;
+			// Clean Up
+			idx = 0;
+			fileSaveCnt = 0;
+			memset(&strTime, 0, sizeof(strTime));
+			apl_rel_usr_inp();
+		}
+	}
 }
 
 
@@ -470,6 +642,7 @@ static int apl_capture(void)
 	TL_E_RESULT ret;
 	uint32_t notify = 0U;
 	TL_Image *data = nullptr;
+	uint16_t unit;
 
 	TL_LGI("%s", __FUNCTION__);
 
@@ -480,8 +653,15 @@ static int apl_capture(void)
 	if (ret == TL_E_SUCCESS) {
 		// recieved image data
 		if ((notify & (uint32_t)TL_NOTIFY_IMAGE) != 0U) {
+			// Convert Depth Unit, Exclude Saturated Depth Data
+			unit = gPrm.mode_info_grp.mode[gPrm.mode].depth_unit;
+			apl_cnv_dp(gPrm.resolution, data, unit);
+
 			// Show the image
 			apl_show_img(gPrm.mode, gPrm.image_kind, gPrm.resolution, data);
+
+			// Save the image if request by user
+			apl_save_file(gPrm.mode, gPrm.resolution, data);
 		}
 	}
 	else {
@@ -604,21 +784,6 @@ static void apl_calc_img_size(TL_ImageFormat *format, size_t *size)
 {
 	// stride = image_width * bit_per_pixel
 	*size = (size_t)format->stride * (size_t)format->height;
-}
-
-
-//******************************************************************************
-//! \brief        Calculate Data Size From Pixel Format
-//! \details
-//! \param[in]    format    pixel format (tof library)
-//! \param[in]    bpp       bit per pixel of data
-//! \param[out]   size      data size
-//! \return       None
-//! \date         2021-02-16, Tue, 02:33 PM
-//******************************************************************************
-static void apl_calc_data_size(TL_ImageFormat *format, uint16_t bpp, size_t *size)
-{
-	*size = (size_t)format->width * (size_t)format->height * (size_t)bpp;
 }
 
 
@@ -819,6 +984,38 @@ void apl_show_pnl(void)
 	cv::resizeWindow(OPENCV_WINDOW_NAME_PANEL_VIEWER, 340, 80);
 	cv::waitKey(1);  // Draw The Screen And Wait For 1 Millisecond.
 
+}
+
+//******************************************************************************
+//! \brief        Preprocess depth data, convert using depth_unit, exclude saturated depth data.
+//! \n
+//! \param[in]    reso          Depth Image Format.
+//! \param[in]    stData        Image data.
+//! \param[in]    uint16_t      depth_unit [mm/digit].
+//! \param[out]   None.
+//! \return       None
+//******************************************************************************
+void apl_cnv_dp(TL_Resolution reso, TL_Image *stData, uint16_t unit)
+{
+	size_t w;
+	size_t h;
+	uint16_t* src;
+	uint16_t* end;
+
+	h = reso.depth.height;
+	w = reso.depth.width;
+	src = static_cast<uint16_t*>(stData->depth);
+	end = src + (w * h);
+
+	while (src < end) {
+		if (*src == RAW12_INVALID_DEPTH) {
+			*src = 0;	//INVALID_DEPTH;
+		}
+		else {
+			*src *= unit;
+		}
+		src++;
+	}
 }
 
 //******************************************************************************
@@ -1023,6 +1220,33 @@ void apl_show_img(TL_E_MODE mode, TL_E_IMAGE_KIND img_kind, TL_Resolution reso, 
 //! \return       void pointer
 //! \date         2021-11-30, Tue, 02:33 PM
 //******************************************************************************
+void *user_input_thread(void *data)
+{
+	std::string tempInput;
+
+	while (true) {
+		if (userInput.empty()) {
+			std::cout << std::endl;
+			std::cout << "Enter number of files to save: ";
+			std::getline(std::cin, tempInput);
+
+			// Lock The Mutex Before Accessing Shared Data
+			std::lock_guard<std::mutex> lock(mutexUserInput);
+			userInput = tempInput;   // Copy The Input To The Shared Variable
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+	}
+}
+
+
+//******************************************************************************
+//! \brief        Thread to handle image capture and view
+//! \n
+//! \param[in]    data         Data.
+//! \return       void pointer
+//! \date         2021-11-30, Tue, 02:33 PM
+//******************************************************************************
 void *view_thread(void *data)
 {
 	std::chrono::system_clock::time_point tickforFixFps = (std::chrono::system_clock::time_point::min)();
@@ -1114,6 +1338,12 @@ int main(int argc, char *argv[])
 	}
 
 	// Create Threads
+	if (pthread_create(&threadusrinp, NULL, user_input_thread, NULL) != 0) {
+		printf("pthread_create failed\n");
+		exit(-1);
+	}
+
+	// Create Threads
 	if (pthread_create(&threadview, NULL, view_thread, NULL) != 0) {
 		printf("pthread_create failed\n");
 		exit(-1);
@@ -1131,6 +1361,11 @@ int main(int argc, char *argv[])
 		printf("app exit abnormal\n");
 		(void) apl_term();
 		exit(-1);
+	}
+
+	// Wait Threads Terminate
+	if (threadusrinp) {
+		pthread_join(threadusrinp, NULL);
 	}
 
 	// Wait Threads Terminate
